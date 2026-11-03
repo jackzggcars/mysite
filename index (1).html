@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J's Site</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1d1d1b;--muted:#6b6b66;--line:#e2e1da;--accent:#2a5bd7;--card:#fff;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ecebe6;--muted:#9a9990;--line:#2e2e2b;--accent:#7ea2ff;--card:#1e1e1c}}
+body{margin:0;background:var(--bg);color:var(--fg);font:18px/1.65 Georgia,serif}
+main{max-width:660px;margin:0 auto;padding:32px 20px 80px}
+header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:28px}
+header a.site{color:var(--fg);text-decoration:none;font-size:1.4rem;font-weight:bold}
+nav,.meta,button,.back,.err{font:14px system-ui,sans-serif}
+nav a,.back{color:var(--accent);text-decoration:none;margin-left:12px;cursor:pointer}.back{margin:0}
+.meta{color:var(--muted)}
+.post{padding:18px 0;border-bottom:1px solid var(--line)}
+.post h2{margin:0 0 4px;font-size:1.25rem}.post h2 a{color:var(--fg);text-decoration:none}
+.excerpt{margin:6px 0 0;color:var(--muted)}
+input,textarea{font:inherit;width:100%;box-sizing:border-box;background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:10px}
+input.t{font-size:1.2rem;font-weight:bold}textarea{min-height:340px;line-height:1.6}
+button{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:7px 14px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button.danger{color:#c0392b}
+.row{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap;align-items:center}
+.err{color:#c0392b}
+.about h1{margin:0 0 12px}.about p{margin:0 0 1em}.about-link{display:inline-block;margin-top:18px}
+</style>
+</head>
+<body>
+<main>
+  <header><a class="site" href="#" id="site"></a><nav id="nav"></nav></header>
+  <div id="view"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const SITE_TITLE = "J's Site";
+const SUPABASE_URL = 'https://zrfeabcmvrqknnvlrbtm.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_ALm0zgNBkjm1O4NKyxHiqw_nm3yLWrU'; // public by design
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const view = document.getElementById('view');
+const nav = document.getElementById('nav');
+let session = null;
+
+document.getElementById('site').textContent = SITE_TITLE;
+document.title = SITE_TITLE;
+
+function el(tag, props, kids) {
+  const e = document.createElement(tag);
+  for (const k in (props || {})) {
+    if (k === 'text') e.textContent = props[k];
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), props[k]);
+    else if (k === 'class') e.className = props[k];
+    else e.setAttribute(k, props[k]);
+  }
+  (kids || []).forEach(c => c && e.appendChild(c));
+  return e;
+}
+const fmt = t => new Date(t).toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' });
+const clear = () => { view.textContent = ''; };
+const note = (t, cls) => { clear(); view.appendChild(el('p', { class: cls || 'meta', text: t })); };
+
+function renderNav() {
+  nav.textContent = '';
+  nav.appendChild(el('a', { href: '#', text: 'About' }));
+  nav.appendChild(el('a', { href: '#writings', text: 'Writings' }));
+  if (session) {
+    nav.appendChild(el('a', { href: '#new', text: 'New post' }));
+    nav.appendChild(el('a', { text: 'Log out', onclick: async () => { await db.auth.signOut(); } }));
+  } else {
+    nav.appendChild(el('a', { href: '#login', text: 'Writer login' }));
+  }
+}
+
+async function showHome() {
+  note('Loading…');
+  const { data, error } = await db.from('about').select('body').eq('id', 1).maybeSingle();
+  if (error) return note('Could not load the about section.', 'err');
+  clear();
+  const wrap = el('section', { class: 'about' }, [el('h1', { text: 'About me' })]);
+  const text = data && data.body && data.body.trim();
+  if (text) text.split(/\n\s*\n/).filter(x => x.trim()).forEach(x => wrap.appendChild(el('p', { text: x.trim() })));
+  else wrap.appendChild(el('p', { class: 'meta', text: 'Nothing here yet.' }));
+  view.appendChild(wrap);
+  view.appendChild(el('a', { class: 'back about-link', href: '#writings', text: 'Read my writings →' }));
+  if (session) view.appendChild(el('div', { class: 'row' }, [el('a', { class: 'back', href: '#edit-about', text: 'Edit about me' })]));
+}
+
+async function showAboutEditor() {
+  if (!session) { location.hash = 'login'; return; }
+  const r = await db.from('about').select('body').eq('id', 1).maybeSingle();
+  clear();
+  const body = el('textarea', { placeholder: 'Tell people about yourself. A blank line starts a new paragraph.' });
+  body.value = r.data ? r.data.body : '';
+  const err = el('span', { class: 'err' });
+  const save = el('button', { class: 'primary', text: 'Save', onclick: async () => {
+    err.textContent = '';
+    const { error } = await db.from('about').upsert({ id: 1, body: body.value, updated_at: new Date().toISOString() });
+    if (error) { err.textContent = 'Could not save: ' + error.message; return; }
+    location.hash = '';
+  } });
+  view.append(el('h1', { text: 'Edit about me' }), body,
+    el('div', { class: 'row' }, [save, el('a', { class: 'back', href: '#', text: 'Cancel' }), err]));
+}
+
+async function showList() {
+  note('Loading…');
+  const { data, error } = await db.from('posts').select('id,title,body,created_at').order('created_at', { ascending: false });
+  if (error) return note('Could not load posts.', 'err');
+  clear();
+  if (!data.length) return note('Nothing published yet.');
+  data.forEach(p => {
+    const flat = p.body.replace(/\s+/g, ' ');
+    view.appendChild(el('div', { class: 'post' }, [
+      el('h2', null, [el('a', { href: '#post/' + p.id, text: p.title || 'Untitled' })]),
+      el('div', { class: 'meta', text: fmt(p.created_at) }),
+      el('p', { class: 'excerpt', text: flat.slice(0, 160) + (flat.length > 160 ? '…' : '') })
+    ]));
+  });
+}
+
+async function showPost(id) {
+  note('Loading…');
+  const { data: p, error } = await db.from('posts').select('*').eq('id', id).maybeSingle();
+  if (error || !p) return note('Post not found.');
+  clear();
+  view.appendChild(el('a', { class: 'back', href: '#writings', text: '← All posts' }));
+  const art = el('article', null, [el('h1', { text: p.title || 'Untitled' }), el('div', { class: 'meta', text: fmt(p.created_at) })]);
+  p.body.split(/\n\s*\n/).filter(x => x.trim()).forEach(x => art.appendChild(el('p', { text: x.trim() })));
+  view.appendChild(art);
+  if (session) view.appendChild(el('div', { class: 'row' }, [el('a', { class: 'back', href: '#edit/' + p.id, text: 'Edit' })]));
+}
+
+async function showEditor(id) {
+  if (!session) { location.hash = 'login'; return; }
+  let p = null;
+  if (id) {
+    const r = await db.from('posts').select('*').eq('id', id).maybeSingle();
+    p = r.data;
+    if (!p) return note('Post not found.');
+  }
+  clear();
+  const title = el('input', { class: 't', placeholder: 'Title' }); title.value = p ? p.title : '';
+  const body = el('textarea', { placeholder: 'Write here. A blank line starts a new paragraph.' }); body.value = p ? p.body : '';
+  const err = el('span', { class: 'err' });
+  const publish = el('button', { class: 'primary', text: 'Publish', onclick: async () => {
+    if (!title.value.trim() && !body.value.trim()) return;
+    err.textContent = '';
+    const row = { title: title.value.trim(), body: body.value };
+    const res = p
+      ? await db.from('posts').update({ ...row, updated_at: new Date().toISOString() }).eq('id', p.id).select().single()
+      : await db.from('posts').insert(row).select().single();
+    if (res.error) { err.textContent = 'Could not save: ' + res.error.message; return; }
+    location.hash = 'post/' + res.data.id;
+  } });
+  const row = el('div', { class: 'row' }, [publish, el('a', { class: 'back', href: p ? '#post/' + p.id : '#writings', text: 'Cancel' })]);
+  if (p) row.appendChild(el('button', { class: 'danger', text: 'Delete', onclick: async () => {
+    if (!confirm('Delete this post?')) return;
+    const { error } = await db.from('posts').delete().eq('id', p.id);
+    if (error) { err.textContent = 'Could not delete: ' + error.message; return; }
+    location.hash = 'writings';
+  } }));
+  row.appendChild(err);
+  view.append(title, body, row);
+}
+
+function showLogin() {
+  if (session) { location.hash = ''; return; }
+  clear();
+  const email = el('input', { type: 'email', placeholder: 'Email', autocomplete: 'username' });
+  const pw = el('input', { type: 'password', placeholder: 'Password', autocomplete: 'current-password' });
+  const err = el('p', { class: 'err' });
+  const go = async () => {
+    err.textContent = '';
+    const { error } = await db.auth.signInWithPassword({ email: email.value.trim(), password: pw.value });
+    if (error) err.textContent = 'Login failed.';
+  };
+  pw.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  view.append(email, pw, err, el('button', { class: 'primary', text: 'Log in', onclick: go }));
+}
+
+function route() {
+  renderNav();
+  const h = location.hash.replace(/^#/, '');
+  if (h === 'login') return showLogin();
+  if (h === 'new') return showEditor(null);
+  if (h === 'writings') return showList();
+  if (h === 'edit-about') return showAboutEditor();
+  let m;
+  if ((m = /^edit\/([\w-]+)$/.exec(h))) return showEditor(m[1]);
+  if ((m = /^post\/([\w-]+)$/.exec(h))) return showPost(m[1]);
+  showHome();
+}
+
+window.addEventListener('hashchange', route);
+db.auth.onAuthStateChange((event, s) => {
+  const was = !!session;
+  session = s;
+  if (event === 'SIGNED_IN' && !was && location.hash === '#login') location.hash = '';
+  else if (event === 'INITIAL_SESSION' || (!!s !== was)) route();
+});
+</script>
+</body>
+</html>
